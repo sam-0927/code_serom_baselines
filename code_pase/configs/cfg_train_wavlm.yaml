@@ -1,0 +1,67 @@
+teacher_config:
+  wavlm_ckpt_path: "/workspace/pase/pretrained/WavLM-Large.pt"
+  output_layer: 24
+  load_pretrained: True
+  frozen: True
+
+student_config:
+  wavlm_ckpt_path: "/workspace/pase/pretrained/WavLM-Large.pt"
+  output_layer: 24
+  load_pretrained: True
+  frozen: False
+
+# vocoder_config is optional. Set ckpt_path when Stage 1 is complete
+# (used only for audio sample saving during validation, not for training loss)
+# vocoder_config:
+#   ckpt_path: "/workspace/pase/experiments/exp_vocoder/checkpoints/best_model.tar"
+
+DDP:
+  world_size: 4  # not used
+
+optimizer:
+  lr: 0.001  # not used
+
+scheduler:
+  warmup_steps: 5000  # default: 10000=20 epochs
+  decay_until_step: 50000  # default: 100000=200 epochs
+  max_lr: 1e-4
+  min_lr: 1e-6
+
+samplerate:
+  16000
+
+train_dataset:
+  filelist: /workspace/DB/librispeech_se_snr-515/metadata.txt
+  wav_len: 4
+  num_per_epoch: 8000
+  random_start: True
+  default_fs: 16000
+  mode: train
+
+train_dataloader:
+  batch_size: 4  # default: 4 per GPU
+  num_workers: 4
+  drop_last: True
+  pin_memory: True
+
+validation_dataset:
+  filelist: /workspace/DB/librispeech_se_snr-515_eval/dev-clean/metadata.txt
+  wav_len: 4
+  num_per_epoch: 1000
+  random_start: False
+  default_fs: 16000
+  mode: validation
+
+validation_dataloader: 
+  batch_size: 1    # default: 1
+  num_workers: 4
+  drop_last: True
+  pin_memory: True
+
+trainer:
+  epochs: 200
+  save_checkpoint_interval: 10
+  clip_grad_norm_value: 3.0
+  exp_path: output/exp_DeWavLM
+  resume: False
+  resume_datetime: 2025-10-18-09h54m

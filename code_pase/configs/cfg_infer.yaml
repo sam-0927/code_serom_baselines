@@ -1,0 +1,11 @@
+test_dataset:
+  # filelist: /workspace/pase/filelists/test.txt
+  fileslit: /workspace/DB/librispeech_se_snr-515_eval/test-clean/metadata.txt
+
+network:
+  # exp_path: /workspace/pase/output/exp_vocoder_L24_2026-03-27-20h38m
+  exp_path: /workspace/pase/output/exp_vocoder_dual_2026-04-24-13h22m
+  config: ${network.exp_path}/config.yaml
+  ckpt_name: best_model
+  checkpoint: ${network.exp_path}/checkpoints/${network.ckpt_name}.tar
+  enh_folder: ${network.exp_path}/${network.ckpt_name}/enhanced
