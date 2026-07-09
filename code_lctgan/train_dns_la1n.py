@@ -9,29 +9,20 @@ from pathlib import Path
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from os import listdir
 from cru_loss_mres2 import cruse_loss
-from discri_t import *
-import torchaudio
+from discriminator import *
 import soundfile as sf
-from torchaudio.transforms import Spectrogram, InverseSpectrogram
-from lct_la1n import Cruse
-import matplotlib.pyplot as plt
+from torchaudio.transforms import InverseSpectrogram
+from model import Cruse
 from torch.utils.tensorboard import SummaryWriter
 
 # Path Configurations
 dir_input = '/workspace/DB/librispeech_se_snr-515/metadata.txt'
 dir_input_val = '/workspace/DB/librispeech_se_snr-515_eval/dev-clean/metadata.txt'
-dir_checkpoint = './output'
-dir_checkpoint_msd = './output/ckp_dns_la1n_gan1_msd3'
-dir_checkpoint_mpd = './output/ckp_dns_la1n_gan1_mpd3'
-dir_lossplots = './output/loss_plot'
 
 # Helper functions for signal processing
-todb = lambda x:torch.log10(torch.abs(x)+1e-10)
 device = torch.device("cuda:0")
 win = lambda x: torch.sqrt(torch.hann_window(x)).to(device)
-to_spec = Spectrogram(n_fft=512, hop_length=256, power=None, window_fn=win)
 from_spec = InverseSpectrogram(n_fft=512, hop_length=256, window_fn=win)
 
 TARGET_SAMPLES = 5 * 16000  # 5 seconds at 16 kHz
@@ -48,7 +39,7 @@ def _stft(waveform: torch.Tensor) -> torch.Tensor:
     return torch.stack(out)  # [channels, time, freq]
 
 class MyDataset(Dataset):
-    def __init__(self, filelist_path, data_num=None):
+    def __init__(self, filelist_path, data_num=None, random_crop=True):
         all_files = []
         skipped = 0
         with open(filelist_path, "r") as f:
@@ -66,20 +57,26 @@ class MyDataset(Dataset):
             self.pt_files = random.sample(all_files, min(data_num, len(all_files)))
         else:
             self.pt_files = all_files
+        self.random_crop = random_crop
 
     def __getitem__(self, idx):
         clean_path, noisy_path = self.pt_files[idx]
         gt_np, _ = sf.read(clean_path, always_2d=True)   # [samples, channels]
         noisy_np, _ = sf.read(noisy_path, always_2d=True)
-        gt = torch.from_numpy(gt_np.T).float()[:, :TARGET_SAMPLES]    # [channels, samples]
-        noisy = torch.from_numpy(noisy_np.T).float()[:, :TARGET_SAMPLES]
+        if self.random_crop:
+            start = random.randint(0, noisy_np.shape[0] - TARGET_SAMPLES)
+        else:
+            start = 0
+        end = start + TARGET_SAMPLES
+        gt = torch.from_numpy(gt_np.T).float()[:, start:end]    # [channels, samples]
+        noisy = torch.from_numpy(noisy_np.T).float()[:, start:end]
         return {'input': _stft(noisy), 'gt': _stft(gt)}
 
     def __len__(self):
         return len(self.pt_files)
 
-def data_generator(filelist_path, data_num=None):
-    dataset = MyDataset(filelist_path, data_num=data_num)
+def data_generator(filelist_path, data_num=None, random_crop=True):
+    dataset = MyDataset(filelist_path, data_num=data_num, random_crop=random_crop)
     datasize = len(dataset)
     return dataset, datasize
 
@@ -124,7 +121,7 @@ def train_model(
     mpd.train();
 
     loader_args = dict(batch_size=batch_size, num_workers=4, pin_memory=True)
-    dataset_val, datasize_val = data_generator(dir_input_val)
+    dataset_val, datasize_val = data_generator(dir_input_val, random_crop=False)
     n_val = datasize_val
     val_loader = DataLoader(dataset_val, shuffle=False, drop_last=True, **loader_args)
 
@@ -165,6 +162,7 @@ def train_model(
         model.train()
         dataset_train, n_train = data_generator(dir_input, data_num=9000)
         train_loader = DataLoader(dataset_train, shuffle=True, drop_last=True, **loader_args)
+        num_train_batches = len(train_loader)
         epoch_loss = 0
         epoch_lossd = 0
         epoch_lossc = 0
@@ -235,6 +233,7 @@ def train_model(
 
         # Validation Loop
         model.eval()
+        num_val_batches = len(val_loader)
         val_loss = 0
         val_lossd = 0
         val_lossc = 0
@@ -281,39 +280,21 @@ def train_model(
         model.train()
 
         # Logging metrics
-        logging.info(f'''train_loss: {epoch_loss/n_train}''')
-        logging.info(f'''train_lossd: {epoch_lossd/n_train}''')
-        logging.info(f'''train_lossc: {epoch_lossc/n_train}''')
-        logging.info(f'''val_loss: {val_loss/n_val}''')
-        logging.info(f'''val_lossd: {val_lossd/n_val}''')
-        logging.info(f'''val_lossc: {val_lossc/n_val}''')
-        writer.add_scalar('Train/gen', epoch_loss/n_train, epoch)
-        writer.add_scalar('Train/disc', epoch_lossd/n_train, epoch)
-        writer.add_scalar('Train/cruse', epoch_lossc/n_train, epoch)
-        writer.add_scalar('Val/gen', val_loss/n_val, epoch)
-        writer.add_scalar('Val/disc', val_lossd/n_val, epoch)
-        writer.add_scalar('Val/cruse', val_lossc/n_val, epoch)
-        train_loss_list.append(epoch_loss/n_train)
-        val_loss_list.append(val_loss/n_val)
+        logging.info(f'''train_loss: {epoch_loss/num_train_batches}''')
+        logging.info(f'''train_lossd: {epoch_lossd/num_train_batches}''')
+        logging.info(f'''train_lossc: {epoch_lossc/num_train_batches}''')
+        logging.info(f'''val_loss: {val_loss/num_val_batches}''')
+        logging.info(f'''val_lossd: {val_lossd/num_val_batches}''')
+        logging.info(f'''val_lossc: {val_lossc/num_val_batches}''')
+        writer.add_scalar('Train/gen', epoch_loss/num_train_batches, epoch)
+        writer.add_scalar('Train/disc', epoch_lossd/num_train_batches, epoch)
+        writer.add_scalar('Train/cruse', epoch_lossc/num_train_batches, epoch)
+        writer.add_scalar('Val/gen', val_loss/num_val_batches, epoch)
+        writer.add_scalar('Val/disc', val_lossd/num_val_batches, epoch)
+        writer.add_scalar('Val/cruse', val_lossc/num_val_batches, epoch)
+        train_loss_list.append(epoch_loss/num_train_batches)
+        val_loss_list.append(val_loss/num_val_batches)
         x.append(epoch)
-
-        # Visualizing and saving loss plots
-        Path(dir_lossplots).mkdir(parents=True, exist_ok=True)
-        if epoch % 5 == 0:
-            plt.figure(figsize=(6, 6), dpi=100)
-            try:
-                train_loss_lines.remove(train_loss_lines[0])
-                val_loss_lines.remove(val_loss_lines[0])
-            except Exception:
-                pass
-
-            train_loss_lines = plt.plot(x, train_loss_list, 'r', lw=1)
-            val_loss_lines = plt.plot(x, val_loss_list, 'b', lw=1)
-            plt.title("loss")
-            plt.xlabel("epoch")
-            plt.ylabel("loss")
-            plt.legend(["train_loss", "val_loss"])
-            plt.savefig(str(dir_lossplots + '/loss_epoch%d.png'%(epoch))) 
 
         # Saving model and discriminator checkpoints
         if save_checkpoint:
@@ -337,13 +318,13 @@ def train_model(
                 }, str(dir_checkpoint + '/optim_epoch{}.pth'.format(epoch)))
                 logging.info(f'Checkpoint {epoch} saved!')
 
-            avg_val_loss = val_loss / n_val
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
+            avg_val_lossc = val_lossc / num_val_batches
+            if avg_val_lossc < best_val_loss:
+                best_val_loss = avg_val_lossc
                 torch.save(model.state_dict(), str(dir_checkpoint + '/checkpoint_best.pth'))
                 torch.save(msd.state_dict(), str(dir_checkpoint_msd + '/checkpoint_best.pth'))
                 torch.save(mpd.state_dict(), str(dir_checkpoint_mpd + '/checkpoint_best.pth'))
-                logging.info(f'Best checkpoint saved at epoch {epoch} (val_loss={best_val_loss:.6f})')
+                logging.info(f'Best checkpoint saved at epoch {epoch} (val_lossc={best_val_loss:.6f})')
 
     writer.close()
 
@@ -359,6 +340,8 @@ def get_args():
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
     parser.add_argument('--resume-epoch', '-r', type=int, default=0, dest='resume_epoch',
                         help='Resume training from this epoch (loads model/discriminator/optimizer checkpoints)')
+    parser.add_argument('--outdir', '-o', type=str, default='./output', dest='outdir',
+                        help='Directory to save checkpoints (model, msd, mpd, optimizer, tensorboard logs)')
     return parser.parse_args()
 
 if __name__ == '__main__':
@@ -366,6 +349,10 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
+
+    dir_checkpoint = args.outdir
+    dir_checkpoint_msd = os.path.join(dir_checkpoint, 'msd')
+    dir_checkpoint_mpd = os.path.join(dir_checkpoint, 'mpd')
 
     model = Cruse()
     logging.info(f'Network:\n')
