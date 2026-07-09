@@ -13,7 +13,7 @@ from cru_loss_mres2 import cruse_loss
 from discriminator import *
 import soundfile as sf
 from torchaudio.transforms import InverseSpectrogram
-from model import Cruse
+from lct_la1n import Cruse
 from torch.utils.tensorboard import SummaryWriter
 
 # Path Configurations
